@@ -7,9 +7,9 @@ from streamlit_option_menu import option_menu
 from datetime import date
 from prophet import Prophet
 from prophet.plot import plot_plotly
-from services import load_data, plot_data, plot_multiple_data, plot_volume
 import wikipedia
 import plotly.graph_objects as go
+import yfinance as yf
 
 # Set page layout to wide
 st.set_page_config(layout="wide", page_title="Forcastify", page_icon="📈")
@@ -61,6 +61,66 @@ selected_stocks = st.sidebar.multiselect("Select stocks for comparison", stocks)
 years_to_predict = st.sidebar.slider("Years of prediction:", 1, 5)
 period = years_to_predict * 365
 
+@st.cache_data
+def load_data(ticker, start, end):
+    """
+    Load historical stock price data from Yahoo Finance.
+
+    Parameters:
+    - ticker (str): Stock symbol (e.g., AAPL).
+    - start (str): Start date in the format 'YYYY-MM-DD'.
+    - end (str): End date in the format 'YYYY-MM-DD'.
+
+    Returns:
+    - data (pd.DataFrame): DataFrame containing historical stock price data.
+    """
+    try:
+        data = yf.download(ticker, start, end)
+        data.reset_index(inplace=True)
+        return data
+    except Exception as e:
+        st.error(f"Error loading data for {ticker}: {str(e)}")
+        return None
+
+def plot_data(data):
+    """
+    Plot historical stock price data.
+
+    Parameters:
+    - data (pd.DataFrame): DataFrame containing historical stock price data.
+    """
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data['Date'], y=data['Open'], name="stock_open", line=dict(color='red')))
+    fig.add_trace(go.Scatter(x=data['Date'], y=data['Close'], name="stock_close", line=dict(color='blue')))
+    fig.update_layout(title_text="Stock Prices Over Time", xaxis_rangeslider_visible=True)
+    st.plotly_chart(fig, use_container_width=True)
+
+def plot_multiple_data(data, stock_names):
+    """
+    Plot forecasted stock prices for multiple stocks.
+
+    Parameters:
+    - data (list): List of DataFrames containing forecasted stock price data.
+    - stock_names (list): List of stock names corresponding to the forecasted data.
+    """
+    fig = go.Figure()
+    for i, stock_data in enumerate(data):
+        fig.add_trace(go.Scatter(x=stock_data['ds'], y=stock_data['yhat'], name=f"yhat - {stock_names[i]}"))
+    fig.update_layout(title_text="Stock Prices Over Time", xaxis_rangeslider_visible=True)
+    st.plotly_chart(fig, use_container_width=True)
+
+def plot_volume(data):
+    """
+    Plot historical stock volume data.
+
+    Parameters:
+    - data (pd.DataFrame): DataFrame containing historical stock volume data.
+    """
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=data['Date'], y=data['Volume'], name="stock_volume"))
+    fig.update_layout(title_text="Stock Volume Over Time", xaxis_rangeslider_visible=True)
+    st.plotly_chart(fig, use_container_width=True)
+
 # Display a loading spinner while loading data
 with st.spinner("Loading data..."):
     data = load_data(selected_stock, start_date, end_date)
@@ -106,7 +166,6 @@ if selected_tab == "Information":
         st.markdown(card_html, unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Error fetching information for {selected_stock}: {str(e)}")
-
 
 # Dataframes Tab
 if selected_tab == "Dataframes":
@@ -158,108 +217,59 @@ if selected_tab == "Dataframes":
     st.dataframe(new_forecast, use_container_width=True)
 
 # Plots Tab
-if selected_tab == "Plots":
-    # Raw data plot
+elif selected_tab == "Plots":
+    # Display historical plots
+    st.markdown("<h2><span style='color: orange;'>{}</span> Historical Data Plots</h2>".format(selected_stock), unsafe_allow_html=True)
+    st.write("This section displays plots of historical stock price data for {} from {} to {}.".format(selected_stock, start_date, end_date))
     plot_data(data)
-
-    # Data Volume plot
     plot_volume(data)
+    
+    # Display forecast plots
+    st.markdown("<h2><span style='color: orange;'>{}</span> Forecast Data Plots</h2>".format(selected_stock), unsafe_allow_html=True)
+    st.write("This section displays plots of forecasted stock price data for {} using the Prophet model from {} to {}.".format(selected_stock, end_date, end_date + pd.Timedelta(days=period)))
+    fig1 = plot_plotly(model, forecast)
+    st.plotly_chart(fig1, use_container_width=True)
 
 # Statistics Tab
-if selected_tab == "Statistics":
-    st.markdown("<h2><span style='color: orange;'>Descriptive </span>Statistics</h2>", unsafe_allow_html=True)
-    st.write("This section provides descriptive statistics for the selected stock.")
+elif selected_tab == "Statistics":
+    st.markdown("<h2><span style='color: orange;'>Statistics</span> for {}</h2>".format(selected_stock), unsafe_allow_html=True)
+    st.write("This section provides summary statistics for {}.".format(selected_stock))
+    st.write(data.describe())
 
-    # Descriptive Statistics Table
-    # drop the date column
-    data = data.drop(columns=['Date', 'Adj Close', 'Volume'])
-    st.table(data.describe())
+    # Define statistics to show
+    statistics = {
+        "Mean Open": data['Open'].mean(),
+        "Mean Close": data['Close'].mean(),
+        "Mean Volume": data['Volume'].mean(),
+        "Mean High": data['High'].mean(),
+        "Mean Low": data['Low'].mean(),
+        "MAE": mean_absolute_error(data['Open'], data['Close'])
+    }
 
-# Forecasting Tab    
-if selected_tab == "Forecasting":
-    # Plotting forecast
-    st.markdown("<h2><span style='color: orange;'>{}</span> Forecast Plot</h2>".format(selected_stock), unsafe_allow_html=True)
-    st.write("This section visualizes the forecasted stock price for {} using a time series plot from {} to {}.".format(selected_stock, end_date, end_date + pd.Timedelta(days=period)))
+    st.write(statistics)
 
-    # Merge actual and forecasted data
-    combined = pd.concat([df_train.set_index('ds'), forecast.set_index('ds')], axis=1).reset_index()
-
-    # Custom plot for forecast
-    fig_forecast = go.Figure()
-    fig_forecast.add_trace(go.Scatter(x=combined['ds'], y=combined['y'], mode='lines', name='Actual', line=dict(color='blue')))
-    fig_forecast.add_trace(go.Scatter(x=combined['ds'], y=combined['yhat'], mode='lines', name='Predicted', line=dict(color='red')))
-    fig_forecast.add_trace(go.Scatter(x=combined['ds'], y=combined['yhat_upper'], fill='tonexty', mode='none', name='Upper Bound', line=dict(color='rgba(255,0,0,0)', width=0), fillcolor='rgba(255,0,0,0.1)'))
-    fig_forecast.add_trace(go.Scatter(x=combined['ds'], y=combined['yhat_lower'], fill='tonexty', mode='none', name='Lower Bound', line=dict(color='rgba(255,0,0,0)', width=0), fillcolor='rgba(255,0,0,0.1)'))
-
-    fig_forecast.update_layout(title=f'Forecasted Stock Price for {selected_stock}', xaxis_title='Date', yaxis_title='Stock Price', showlegend=True)
-    st.plotly_chart(fig_forecast, use_container_width=True)
-
-    # Plotting forecast components
-    st.markdown("<h2><span style='color: orange;'>{}</span> Forecast Components</h2>".format(selected_stock), unsafe_allow_html=True)
-    st.write("This section breaks down the forecast components, including trends and seasonality, for {} from {} to {}.".format(selected_stock, end_date, end_date + pd.Timedelta(days=period)))
-    components = model.plot_components(forecast)
-    st.write(components)
+# Forecasting Tab
+elif selected_tab == "Forecasting":
+    st.markdown("<h2><span style='color: orange;'>Forecasting</span> for {}</h2>".format(selected_stock), unsafe_allow_html=True)
+    st.write("This section provides the stock price forecast for {} using the Prophet model.".format(selected_stock))
+    st.dataframe(forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']], use_container_width=True)
 
 # Comparison Tab
-if selected_tab == "Comparison":
-    if selected_stocks:
-        # Forecast multiple stocks
-        stocks_data = []
-        forcasted_data = []
+elif selected_tab == "Comparison":
+    if len(selected_stocks) > 0:
+        st.markdown("<h2><span style='color: orange;'>Comparison</span> of Selected Stocks</h2>", unsafe_allow_html=True)
+        st.write("This section provides a comparison of forecasted stock prices for the selected stocks.")
+        
+        forecast_data = []
         for stock in selected_stocks:
-            stocks_data.append(load_data(stock, start_date, end_date))
-
-        st.markdown("<h2><span style='color: orange;'>{}</span> Forecast Comparison Plot</h2>".format(', '.join(selected_stocks)), unsafe_allow_html=True)
-        st.write("This section visualizes the forecasted stock price for {} using a time series plot from {} to {}.".format(', '.join(selected_stocks), end_date, end_date + pd.Timedelta(days=period)))
-
-        for i, data in enumerate(stocks_data):
-            if data is not None:
-                df_train = data[["Date", "Close"]]
-                df_train = df_train.rename(columns={"Date": "ds", "Close": "y"})
-                model = Prophet()
-                model.fit(df_train)
-                future = model.make_future_dataframe(periods=period)
-                forecast = model.predict(future)
-                forecast = forecast[forecast['ds'] >= end_date_datetime]
-                st.markdown("<h3><span style='color: orange;'>{}</span> Forecast DataFrame</h3>".format(selected_stocks[i]), unsafe_allow_html=True)
-
-                # Copy forecast dataframe
-                new_forecast = forecast.copy()
-
-                # Drop unwanted columns
-                new_forecast = new_forecast.drop(columns=[
-                    'additive_terms', 
-                    'additive_terms_lower', 
-                    'additive_terms_upper', 
-                    'weekly', 
-                    'weekly_lower', 
-                    'weekly_upper', 
-                    'yearly', 
-                    'yearly_lower', 
-                    'yearly_upper', 
-                    'multiplicative_terms', 
-                    'multiplicative_terms_lower', 
-                    'multiplicative_terms_upper'
-                ])
-
-                # Rename columns
-                new_forecast = new_forecast.rename(columns={
-                    "ds": "Date", 
-                    "yhat": "Close", 
-                    "yhat_lower": "Close Lower",
-                    "yhat_upper": "Close Upper",
-                    "trend": "Trend", 
-                    "trend_lower": "Trend Lower", 
-                    "trend_upper": "Trend Upper"
-                })
-
-                st.dataframe(new_forecast, use_container_width=True)
-
-                forcasted_data.append(forecast)
-
-        plot_multiple_data(forcasted_data, selected_stocks)
+            stock_data = load_data(stock, start_date, end_date)
+            df_train = stock_data[["Date", "Close"]]
+            df_train = df_train.rename(columns={"Date": "ds", "Close": "y"})
+            model = Prophet()
+            model.fit(df_train)
+            future = model.make_future_dataframe(periods=period)
+            forecast = model.predict(future)
+            forecast_data.append(forecast)
+        plot_multiple_data(forecast_data, selected_stocks)
     else:
-        st.warning("Please select at least one stock if you want to compare them.")
-
-# Display balloons at the end
-# st.balloons()v
+        st.warning("Please select at least one stock for comparison.")
